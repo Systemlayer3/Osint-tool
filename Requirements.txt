@@ -1,0 +1,10 @@
+streamlit
+pandas
+pymongo
+certifi
+requests
+python-telegram-bot
+pyotp
+qrcode
+dnspython
+aiohttp
